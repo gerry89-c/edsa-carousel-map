@@ -265,7 +265,7 @@ function initMap(){
   dmSvc=new google.maps.DistanceMatrixService();
   infoWin=new google.maps.InfoWindow();
   google.maps.event.addListener(infoWin,"closeclick",()=>{openKind=null;openId=null;});
-  buildSplineRoute(); proceed();
+  buildRoadRoute(); proceed();
 }
 window.gm_authFailure=function(){ const b=document.getElementById("banner"); b.style.display="";
   b.innerHTML='<b>Google Maps could not authenticate.</b> Check the API key is valid and "Maps JavaScript API", "Distance Matrix API" and "Directions API" are enabled with billing on.'; };
@@ -286,6 +286,36 @@ function crPoint(p0,p1,p2,p3,t){
   const B2=crComb(A2,A3,(t3-tt)/((t3-t1)||eps),(tt-t1)/((t3-t1)||eps));
   return crComb(B1,B2,(t2-tt)/((t2-t1)||eps),(tt-t1)/((t2-t1)||eps));
 }
+/* Real EDSA Carousel centerline (Monumento -> PITX), sourced from the actual
+   busway alignment and baked in so the line sits exactly on EDSA with no
+   runtime lookup. Encoded as a Google polyline (~200 vertices, ~100m spacing). */
+const EDSA_ENC = "ovmxAoamaVEhFs@rDxAcHG{LAgEEqFA}DCgEAyDCuIAeGEsFGmFA}FAcEE_LGgFCuI?yECgFAyDCyD?qE?yFCgEAmFE{HCsEIwL?yDFsEd@uEj@uEl@}Er@iFh@}Dr@kFt@kFj@wDdB}CpGiDxDuBdEaCbDkBzEmCrDsBbGwDbE_CdEgClDsBzEoCpLyGpDqB`FoC|D{BhE_C~EsClHaErEsCjFwCpHoCtK_EnEwAbDoApDwA`DqAfEuAhFeBzDuAhDiAtDmAtDuA|GaCfDkAlE_B|FyBzEcBjE{AjDwA`E{AzEgBjDmA|JmDrFiB~HoClG_C|EcBlD}@pDi@vD]hEIvDFxDl@zDz@rJhBvD`ArInBrFjAhEv@jEbAbFlAtGxAnD`A~D|A|CzAnDzBtG`EzEbDhD~BtCfBfDxB~CxB`FpDlF`DlFvCdDnAzElAxFdAfEr@jDx@tKhBjDv@pDtAhDbBfDhCrCxC|CdDhCdDtBnChClDfCpClHdJlEbF|BbDhH`JnDnEpCxD~DbGzCjDlD~D~B|CjDlEcG}JaCiDyB}CrExI~B|CjDlE~B`DrDrEbC`CfNhQvC|DlBrC`BzCzAjD~AlEjApDz@rDt@|Eh@bEl@pH`@pGVrEb@|Ih@xIVjEj@dGXxEL~DInFQfEOfEBvFx@jJh@`Ep@xFj@zDj@jEl@jEn@tEhBbN?xDVzDnDiA}BoC}AqLo@cF~AsDpEWrGq@|E]~G[zF]`H[lF_@jGe@vJo@rF]dEY~DBfHXrDHdFHpGb@|Iv@vGx@hF`A`A{EkGqCdDoA";
+function decodePolyline(str){
+  let index=0, lat=0, lng=0; const out=[];
+  while(index<str.length){
+    let b, shift=0, result=0;
+    do{ b=str.charCodeAt(index++)-63; result|=(b&0x1f)<<shift; shift+=5; }while(b>=0x20);
+    lat += (result&1)?~(result>>1):(result>>1);
+    shift=0; result=0;
+    do{ b=str.charCodeAt(index++)-63; result|=(b&0x1f)<<shift; shift+=5; }while(b>=0x20);
+    lng += (result&1)?~(result>>1):(result>>1);
+    out.push([lat/1e5, lng/1e5]);
+  }
+  return out;
+}
+function buildRoadRoute(){
+  const pts = decodePolyline(EDSA_ENC);
+  // Map each station to its nearest vertex on the real EDSA line.
+  const idx = STOPS.map(s=>{ let best=0,bd=Infinity;
+    for(let i=0;i<pts.length;i++){ const d=hav({lat:s.lat,lng:s.lng},{lat:pts[i][0],lng:pts[i][1]}); if(d<bd){bd=d;best=i;} }
+    return best; });
+  // keep station order strictly increasing along the route
+  for(let i=1;i<idx.length;i++) if(idx[i]<=idx[i-1]) idx[i]=Math.min(pts.length-1, idx[i-1]+1);
+  // snap the station markers onto the line so pins sit exactly on EDSA
+  STOPS.forEach((s,i)=>{ s.lat=pts[idx[i]][0]; s.lng=pts[idx[i]][1]; });
+  buildRouteGeom(pts.map(p=>[+p[0].toFixed(6),+p[1].toFixed(6)]), idx);
+}
+
 function buildSplineRoute(){
   const S=STOPS.map(s=>[s.lat,s.lng]); const N=S.length, SEG=16;
   const pts=[], idx=[];
