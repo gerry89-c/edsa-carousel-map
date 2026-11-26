@@ -34,6 +34,7 @@
     --font-head:"Segoe UI",system-ui,sans-serif; --font-body:system-ui,-apple-system,sans-serif;
   }
   html,body{height:100%;margin:0;font-family:var(--font-body);color:var(--ink);overflow:hidden;overscroll-behavior:none;-webkit-text-size-adjust:100%;text-size-adjust:100%}
+  [hidden]{display:none!important}
   #map{position:absolute;inset:0}
   #overlay{position:absolute;top:12px;left:12px;z-index:5;width:286px;max-width:calc(100vw - 24px);
     background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:0 6px 24px rgba(0,0,0,.18);overflow:hidden;backdrop-filter:blur(4px)}
@@ -102,6 +103,28 @@
   .bus .capnums b{color:var(--ink);font-variant-numeric:tabular-nums}
   .bus .free{font-weight:700}
   .noinbound{font-size:12.5px;color:var(--muted);padding:7px 2px}
+  /* ---- bus detail view ---- */
+  #busPanel{flex:1 1 auto;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;padding:13px 15px;padding-bottom:max(16px,env(safe-area-inset-bottom,0px))}
+  .backbtn{background:#f0f3f6;border:1px solid var(--line);border-radius:8px;padding:6px 12px;font-size:12px;font-weight:600;color:var(--ink);cursor:pointer;-webkit-tap-highlight-color:transparent}
+  .backbtn:hover{background:#e7ecf1}
+  .busart{background:linear-gradient(160deg,#eef4fa,#dfe7ef);border:1px solid var(--line);border-radius:12px;padding:8px 12px;margin:11px 0;height:118px;display:flex;align-items:center;justify-content:center}
+  .busart svg{max-height:100%}
+  .busttl{display:flex;align-items:center;gap:9px;margin-bottom:10px;flex-wrap:wrap}
+  .busttl .num{font-family:var(--font-head);font-weight:700;font-size:16px;padding:3px 10px;border-radius:7px;color:#fff}
+  .busttl .bd{font-size:12.5px;font-weight:600}
+  .capblock{background:#f6f8fa;border:1px solid var(--line);border-radius:10px;padding:11px 12px;margin-bottom:11px}
+  .capline{display:flex;justify-content:space-between;align-items:baseline;font-size:12.5px;color:var(--muted)}
+  .capline b{font-size:15px;color:var(--ink);font-variant-numeric:tabular-nums}
+  .capblock .capbar{height:9px;border-radius:999px;background:#e5e9ee;overflow:hidden;margin:9px 0 7px}
+  .capblock .capbar .fill{height:100%;border-radius:999px}
+  .capfree{font-size:13px;font-weight:700}
+  .brow{display:flex;justify-content:space-between;font-size:12.5px;padding:6px 0;border-bottom:1px dashed var(--line)}
+  .brow span{color:var(--muted)} .brow b{font-weight:600}
+  .bsec{font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);margin:13px 0 4px;display:flex;justify-content:space-between;font-weight:700}
+  .bsec .src{font-weight:700;color:#0e7c66;text-transform:none;letter-spacing:0}
+  .nstop{display:flex;justify-content:space-between;font-size:12.5px;padding:5px 0;border-bottom:1px solid var(--line)}
+  .nstop .e{font-weight:700;font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+  .nstop .e small{display:block;font-weight:400;color:var(--muted);font-size:10px}
   @media(max-width:820px){
     #app{flex-direction:column}
     #mapwrap{flex:none;height:46vh;height:46dvh}
@@ -171,9 +194,10 @@
 
 <aside id="panel">
   <div class="p-hd">
-    <h2>Station arrivals</h2>
-    <div class="p-sub">Next 5 buses each way &middot; live seats available</div>
+    <h2 id="pTitle">Station arrivals</h2>
+    <div class="p-sub" id="pSub">Next 5 buses each way &middot; live seats available</div>
   </div>
+  <div id="busPanel" hidden></div>
   <div id="stationTabs"></div>
   <div id="stationBody">
     <div class="st-name" id="stName">&mdash;</div>
@@ -356,7 +380,7 @@ function busIcon(b, rot){
 function initMap(){
   document.getElementById("banner").style.display="none";
   mapObj=new google.maps.Map(document.getElementById("map"),{
-    center:{lat:14.59,lng:121.02}, zoom:12, mapTypeControl:false, streetViewControl:false, gestureHandling:"greedy" });
+    center:{lat:14.59,lng:121.02}, zoom:12, mapTypeControl:false, streetViewControl:false, gestureHandling:"greedy", clickableIcons:false });
   new google.maps.TrafficLayer().setMap(mapObj);                 // Google live traffic background
   dmSvc=new google.maps.DistanceMatrixService();
   infoWin=new google.maps.InfoWindow();
@@ -438,7 +462,7 @@ function proceed(){
       icon:{path:google.maps.SymbolPath.CIRCLE,scale:s.term?6:4.5,fillColor:s.term?"#0e7c66":"#ffffff",fillOpacity:1,strokeColor:"#0e7c66",strokeWeight:2},title:s.name});
     m.addListener("click",()=>{ selectStation(i); toggleStop(i); }); stopMk[i]=m; });
   FLEET.forEach(b=>{ const m=new google.maps.Marker({map:mapObj,position:markerLatLng(b),zIndex:3,icon:busIcon(b),title:b.plate});
-    m.addListener("click",()=>toggleBus(b.id)); busMk[b.id]=m; });
+    m.addListener("click",()=>selectBus(b.id)); busMk[b.id]=m; });
   startLiveFeed();
   requestAnimationFrame(loop);
 }
@@ -468,7 +492,8 @@ function loop(now){
   updateOverlay();
   if(openKind==="bus"){ const ob=FLEET.find(x=>x.id===openId); if(ob){ fetchGoogleEtas(ob); if(now%1000<32) infoWin.setContent(busIW(ob)); } }
   if(openKind==="stop" && now%1000<32) infoWin.setContent(stopIW(openId));
-  if(panelStation!=null && now%1000<32) renderPanel();
+  if(panelBus==null && panelStation!=null && now%1000<32) renderPanel();
+  if(panelBus!=null && now%1000<32) renderBusPanel();
   requestAnimationFrame(loop);
 }
 
@@ -564,7 +589,12 @@ function renderStationTabs(){
   [...wrap.children].forEach(t=>t.addEventListener("click",()=>selectStation(+t.dataset.i)));
 }
 function selectStation(i){
-  panelStation=i;
+  panelStation=i; panelBus=null;
+  const bp=document.getElementById("busPanel"); if(bp) bp.hidden=true;
+  const st=document.getElementById("stationTabs"); if(st) st.hidden=false;
+  const sb=document.getElementById("stationBody"); if(sb) sb.hidden=false;
+  const pt=document.getElementById("pTitle"); if(pt) pt.textContent="Station arrivals";
+  const ps=document.getElementById("pSub"); if(ps) ps.innerHTML="Next 5 buses each way &middot; live seats available";
   const wrap=document.getElementById("stationTabs");
   if(wrap){ [...wrap.children].forEach((t,k)=>t.classList.toggle("active",k===i));
     const act=wrap.children[i]; if(act) act.scrollIntoView({inline:"center",block:"nearest",behavior:"smooth"}); }
@@ -578,6 +608,87 @@ function renderPanel(){
   const meta=document.getElementById("stMeta"); if(meta) meta.innerHTML=(st.term?"Terminal &middot; ":"")+(st.rail||"EDSA Carousel");
   const sb=document.getElementById("sbList"); if(sb) sb.innerHTML=panelBoard(panelStation,1);
   const nb=document.getElementById("nbList"); if(nb) nb.innerHTML=panelBoard(panelStation,-1);
+}
+
+/* ---------- bus detail view (map stays; panel shows picture + info + arrivals) ---------- */
+let panelBus=null;
+function busArtSVG(b){
+  const south=b.dir>0, off=b.status==="offline";
+  const acc = off?"#8a93a0":(south?"#0e7c66":"#2563c4");
+  const accD= off?"#6f7681":(south?"#0a5d4c":"#1d4e9e");
+  const body="#f8fafc", glass="#d3e6f5", dest=south?"PITX":"MONUMENTO";
+  return `
+<svg viewBox="0 0 360 132" width="300" height="110" preserveAspectRatio="xMidYMid meet" role="img" aria-label="EDSA Carousel bus ${b.plate}">
+  <ellipse cx="185" cy="119" rx="162" ry="8" fill="rgba(0,0,0,.10)"/>
+  <rect x="10" y="26" width="166" height="72" rx="12" fill="${body}" stroke="${accD}" stroke-width="2"/>
+  <path d="M184 98 L184 40 Q184 26 198 26 L330 26 Q352 26 352 50 L352 92 Q352 98 346 98 Z" fill="${body}" stroke="${accD}" stroke-width="2"/>
+  <rect x="167" y="30" width="18" height="66" fill="${accD}"/>
+  <g stroke="${body}" stroke-width="1.5" opacity=".55"><line x1="171" y1="32" x2="171" y2="94"/><line x1="176" y1="32" x2="176" y2="94"/><line x1="181" y1="32" x2="181" y2="94"/></g>
+  <rect x="12" y="26" width="164" height="9" rx="6" fill="${acc}"/>
+  <path d="M184 35 L184 40 Q184 26 198 26 L330 26 Q352 26 352 50 L352 35 Z" fill="${acc}"/>
+  <rect x="22" y="40" width="140" height="26" rx="4" fill="${glass}"/>
+  <g stroke="#fff" stroke-width="2"><line x1="57" y1="40" x2="57" y2="66"/><line x1="92" y1="40" x2="92" y2="66"/><line x1="127" y1="40" x2="127" y2="66"/></g>
+  <rect x="196" y="40" width="96" height="26" rx="4" fill="${glass}"/>
+  <path d="M300 40 L340 40 Q344 40 344 48 L344 62 Q344 66 338 66 L300 66 Z" fill="${glass}"/>
+  <g stroke="#fff" stroke-width="2"><line x1="232" y1="40" x2="232" y2="66"/><line x1="268" y1="40" x2="268" y2="66"/></g>
+  <rect x="120" y="70" width="22" height="26" rx="2" fill="${glass}" stroke="${accD}" stroke-width="1"/>
+  <rect x="230" y="70" width="22" height="26" rx="2" fill="${glass}" stroke="${accD}" stroke-width="1"/>
+  <rect x="12" y="80" width="330" height="12" fill="${acc}" opacity=".92"/>
+  <text x="40" y="89.5" font-family="Segoe UI,system-ui,sans-serif" font-size="9" font-weight="700" fill="#fff" letter-spacing="1.2">EDSA CAROUSEL</text>
+  <rect x="300" y="30" width="46" height="12" rx="2" fill="#1a1f26"/>
+  <text x="323" y="39" text-anchor="middle" font-family="monospace" font-size="8" font-weight="700" fill="#ffd24a">${dest}</text>
+  <circle cx="332" cy="74" r="12" fill="#e4002b" stroke="#fff" stroke-width="2"/>
+  <text x="332" y="79" text-anchor="middle" font-family="Segoe UI,system-ui,sans-serif" font-size="13" font-weight="800" fill="#fff">E</text>
+  <g><circle cx="55" cy="100" r="15" fill="#20262d"/><circle cx="55" cy="100" r="6" fill="#aab2bb"/>
+     <circle cx="150" cy="100" r="15" fill="#20262d"/><circle cx="150" cy="100" r="6" fill="#aab2bb"/>
+     <circle cx="300" cy="100" r="15" fill="#20262d"/><circle cx="300" cy="100" r="6" fill="#aab2bb"/></g>
+  <rect x="347" y="68" width="5" height="7" rx="2" fill="#ffd24a"/>
+</svg>`;
+}
+function busPanelHTML(b){
+  const south=b.dir>0, off=b.status==="offline";
+  const col=off?"#9aa6b2":(south?"#0e7c66":"#2563c4");
+  const dir=south?"Southbound &rarr; PITX":"Northbound &rarr; Monumento";
+  let h=`<button class="backbtn">&larr; All stations</button>`;
+  h+=`<div class="busart">${busArtSVG(b)}</div>`;
+  h+=`<div class="busttl"><span class="num" style="background:${col}">${b.plate}</span><span class="bd" style="color:${col}">${dir}</span></div>`;
+  if(off){ return h+`<div class="brow"><span>Status</span><b style="color:#cf3b3b">GPS offline</b></div><div class="brow"><span>Operator</span><b>${b.op||'&mdash;'}</b></div>`; }
+  const cap=b.cap||90, on=Math.max(0,Math.round((b.loadFrac||0)*cap)), free=cap-on, pct=Math.min(100,Math.round(on/cap*100)), lc=loadColor(b.loadFrac||0);
+  const freeTxt = free>=0 ? `${free} seat${free===1?'':'s'} still available` : `Overloaded by ${-free} passengers`;
+  const lvl=traffic[stationSeg(b.pos)], tw=lvl<1?"Free":lvl<2?"Moderate":lvl<2.6?"Heavy":"Standstill";
+  h+=`<div class="capblock"><div class="capline"><span>Passengers on board</span><b style="color:${lc}">${on} / ${cap} seats</b></div>`+
+     `<div class="capbar"><div class="fill" style="width:${pct}%;background:${lc}"></div></div>`+
+     `<div class="capfree" style="color:${free>=0?(free>0?'#2f7d32':'#c67a00'):'#cf3b3b'}">${freeTxt}</div></div>`;
+  h+=`<div class="brow"><span>Load</span><b style="color:${lc}">${loadWord(b.loadFrac||0)}</b></div>`+
+     `<div class="brow"><span>Current speed</span><b>${(b.speed||0).toFixed(0)} km/h</b></div>`+
+     `<div class="brow"><span>Traffic ahead</span><b>${tw}</b></div>`+
+     `<div class="brow"><span>Operator</span><b>${b.op||'&mdash;'}</b></div>`;
+  const usingG = b._geta && Object.keys(b._geta.map||{}).length>0;
+  h+=`<div class="bsec"><span>Next stops</span><span class="src">${usingG?'Google live traffic':'model estimate'}</span></div>`;
+  h+=nextStopIdxs(b).slice(0,5).map(i=>{ const g=b._geta&&b._geta.map&&b._geta.map[i]; const m=g!=null?g:etaModel(b,i);
+      const at=new Date(simTime.getTime()+m*60000), cl=String(at.getHours()).padStart(2,"0")+":"+String(at.getMinutes()).padStart(2,"0");
+      return `<div class="nstop"><span>${STOPS[i].name}</span><span class="e">${m<1?'<1':Math.round(m)} min<small>ETA ${cl}</small></span></div>`; }).join("");
+  return h;
+}
+function renderBusPanel(){
+  if(panelBus==null) return;
+  const b=FLEET.find(x=>x.id===panelBus); if(!b) return;
+  const el=document.getElementById("busPanel"); if(!el) return;
+  el.innerHTML=busPanelHTML(b);
+  const bk=el.querySelector(".backbtn");
+  if(bk) bk.onclick=()=>{ if(openKind==="bus"){infoWin.close();openKind=null;openId=null;} selectStation(panelStation==null?0:panelStation); };
+}
+function selectBus(id){
+  const b=FLEET.find(x=>x.id===id); if(!b) return;
+  panelBus=id;
+  const bp=document.getElementById("busPanel"); if(bp) bp.hidden=false;
+  const st=document.getElementById("stationTabs"); if(st) st.hidden=true;
+  const sb=document.getElementById("stationBody"); if(sb) sb.hidden=true;
+  const pt=document.getElementById("pTitle"); if(pt) pt.textContent="Bus details";
+  const ps=document.getElementById("pSub"); if(ps) ps.innerHTML="Live vehicle, capacity &amp; arrivals";
+  openKind="bus"; openId=id; fetchGoogleEtas(b); infoWin.setContent(busIW(b)); infoWin.open(mapObj,busMk[id]);
+  if(mapObj) mapObj.panTo(markerLatLng(b));
+  renderBusPanel();
 }
 
 /* ---------- toggle selection (press opens, press again closes) ---------- */
