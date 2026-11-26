@@ -474,13 +474,21 @@ function buildSplineRoute(){
 /* Clear, high-visibility station markers: a bold white dot with a thick
    EDSA-green ring (terminals larger and darker). Names show when zoomed in. */
 function stationIcon(s){
-  return { path:google.maps.SymbolPath.CIRCLE, scale:s.term?9:7,
-    fillColor:"#ffffff", fillOpacity:1,
-    strokeColor:s.term?"#0a5d4c":"#0e7c66", strokeWeight:s.term?4:3,
-    labelOrigin:new google.maps.Point(0, s.term?2.0:2.5) };
+  const term=s.term, ring=term?"#0a5d4c":"#0e7c66", glow=term?"#0f9c7e":"#1fd39f";
+  const W=term?76:66, c=W/2, dotR=term?13:11, glowR=term?25:21, sd=term?5.5:4.5;
+  const svg="<svg xmlns='http://www.w3.org/2000/svg' width='"+W+"' height='"+W+"' viewBox='0 0 "+W+" "+W+"'>"+
+    "<defs><filter id='b' x='-70%' y='-70%' width='240%' height='240%'><feGaussianBlur stdDeviation='"+sd+"'/></filter></defs>"+
+    "<circle cx='"+c+"' cy='"+c+"' r='"+glowR+"' fill='"+glow+"' opacity='0.75' filter='url(#b)'/>"+
+    "<circle cx='"+c+"' cy='"+c+"' r='"+(glowR*0.62)+"' fill='"+glow+"' opacity='0.55' filter='url(#b)'/>"+
+    "<circle cx='"+c+"' cy='"+c+"' r='"+dotR+"' fill='#ffffff' stroke='"+ring+"' stroke-width='"+(term?5:4)+"'/>"+
+    (term?"<circle cx='"+c+"' cy='"+c+"' r='"+(dotR-5.5)+"' fill='"+ring+"'/>":"")+
+    "</svg>";
+  return { url:"data:image/svg+xml;charset=UTF-8,"+encodeURIComponent(svg),
+    scaledSize:new google.maps.Size(W,W), anchor:new google.maps.Point(c,c),
+    labelOrigin:new google.maps.Point(c, c+dotR+10) };
 }
 function updateStationLabels(){
-  if(!mapObj) return; const show = mapObj.getZoom()>=14;
+  if(!mapObj) return; const show = mapObj.getZoom()>=13;
   STOPS.forEach((s,i)=>{ const m=stopMk[i]; if(!m) return;
     m.setLabel(show?{text:s.name,fontSize:s.term?"12px":"11px",fontWeight:"700",color:s.term?"#0a5d4c":"#0e7c66",className:"stlabel"}:null); });
 }
