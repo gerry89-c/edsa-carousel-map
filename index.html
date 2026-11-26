@@ -64,6 +64,8 @@
   .iw .ns{display:flex;justify-content:space-between;font-size:12.5px;padding:3px 0;border-bottom:1px solid var(--line)}
   .iw .ns .e{font-weight:700;font-variant-numeric:tabular-nums}
   .iw .lc{font-size:10px;font-weight:700;padding:1px 6px;border:1px solid;border-radius:999px;margin-left:5px}
+  .iw .dp{font-size:10px;font-weight:700;margin-left:6px;white-space:nowrap}
+  .iw .ns .e small{display:block;font-weight:400;color:var(--muted);font-size:10.5px}
   .iw .boardttl{font-weight:700;margin-top:10px;font-size:12.5px}
   #banner{position:absolute;left:50%;top:14px;transform:translateX(-50%);z-index:9;max-width:92vw;
     background:#fff;border:1px solid #e0a033;border-left:5px solid #e0a033;border-radius:10px;padding:11px 15px;font-size:13px;box-shadow:0 6px 24px rgba(0,0,0,.18)}
@@ -404,16 +406,27 @@ function busIW(b){ if(!b) return "";
   return h+`</div>`;
 }
 function stopIW(i){ const st=STOPS[i];
-  function board(dirSel,label){ const list=[];
-    FLEET.forEach(b=>{if(b.status==="offline")return;if(b.dir!==dirSel)return;const heading=(dirSel>0&&stationPos[i]>b.pos+0.02)||(dirSel<0&&stationPos[i]<b.pos-0.02);if(heading)list.push({b,eta:etaModel(b,i)});});
-    list.sort((a,b)=>a.eta-b.eta);
-    let h=`<div class="boardttl" style="color:${dirSel>0?'#0e7c66':'#2563c4'}">${label}</div>`;
-    h+=list.length?list.slice(0,3).map(a=>{const at=new Date(simTime.getTime()+a.eta*60000);const cl=String(at.getHours()).padStart(2,"0")+":"+String(at.getMinutes()).padStart(2,"0");
-      return `<div class="ns"><span>${a.b.plate}<span class="lc" style="color:${loadColor(a.b.loadFrac||0)};border-color:${loadColor(a.b.loadFrac||0)}">${loadWord(a.b.loadFrac||0)}</span></span><span class="e">${cl} &middot; ${a.eta<1?"<1":Math.round(a.eta)}m</span></div>`;}).join(""):`<div class="ns" style="color:#5c6977">No buses inbound.</div>`;
-    return h; }
+  // all buses currently inbound to this station (either direction), soonest first
+  const list=[];
+  FLEET.forEach(b=>{ if(b.status==="offline") return;
+    const heading=(b.dir>0 && stationPos[i]>b.pos+0.02) || (b.dir<0 && stationPos[i]<b.pos-0.02);
+    if(heading) list.push({b, eta:etaModel(b,i)}); });
+  list.sort((a,b)=>a.eta-b.eta);
+  const top=list.slice(0,5);                                   // cap at 5 arrivals
+  const rows = top.length ? top.map(a=>{
+      const at=new Date(simTime.getTime()+a.eta*60000);
+      const cl=String(at.getHours()).padStart(2,"0")+":"+String(at.getMinutes()).padStart(2,"0");
+      const sb=a.b.dir>0, dc=sb?"#0e7c66":"#2563c4", dl=sb?"&darr; PITX":"&uarr; Monumento";
+      const lc=loadColor(a.b.loadFrac||0);
+      return `<div class="ns"><span><span class="plate" style="background:${dc};font-size:12px;padding:1px 6px">${a.b.plate}</span>`+
+             `<span class="dp" style="color:${dc}">${dl}</span>`+
+             `<span class="lc" style="color:${lc};border-color:${lc}">${loadWord(a.b.loadFrac||0)}</span></span>`+
+             `<span class="e">${a.eta<1?"<1":Math.round(a.eta)} min<small>${cl}</small></span></div>`;
+    }).join("") : `<div class="ns" style="color:#5c6977">No buses inbound right now.</div>`;
   return `<div class="iw"><div style="font-weight:700;font-size:15px">${st.name}</div>`+
-    `<div style="font-size:11px;color:#5c6977;margin-bottom:2px">${st.term?"Terminal &middot; ":""}${st.rail||""}</div>`+
-    board(1,"Southbound &rarr; PITX")+board(-1,"Northbound &rarr; Monumento")+`</div>`;
+    `<div style="font-size:11px;color:#5c6977;margin-bottom:6px">${st.term?"Terminal &middot; ":""}${st.rail||"EDSA Carousel"}</div>`+
+    `<h3><span>Buses on the way</span><span class="src" style="color:#0e7c66">next ${top.length} &middot; ETA</span></h3>`+
+    rows+`</div>`;
 }
 
 /* ---------- toggle selection (press opens, press again closes) ---------- */
