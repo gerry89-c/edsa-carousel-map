@@ -78,9 +78,12 @@
   #app{display:flex;height:100vh;height:100dvh;width:100%}
   #mapwrap{position:relative;flex:1 1 auto;min-width:0}
   #panel{flex:0 0 376px;width:376px;background:#fff;border-left:1px solid var(--line);display:flex;flex-direction:column;overflow:hidden}
+  #sheetGrab{flex:none}
   #panel .p-hd{padding:12px 15px;border-bottom:1px solid var(--line);flex:none}
   #panel .p-hd h2{margin:0;font-family:var(--font-head);font-size:15px}
   #panel .p-hd .p-sub{font-size:11px;color:var(--muted);margin-top:2px}
+  .sheet-handle{display:none;justify-content:center;padding:7px 0 3px}
+  .sheet-handle .grip{width:40px;height:5px;border-radius:999px;background:#c7cfd8}
   #stationTabs{display:flex;gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding:9px 12px;border-bottom:1px solid var(--line);flex:none;scrollbar-width:thin}
   #stationTabs .tab{flex:none;font-size:12px;font-weight:600;padding:6px 11px;border-radius:999px;border:1px solid var(--line);background:#f6f8fa;color:var(--ink);cursor:pointer;white-space:nowrap;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
   #stationTabs .tab:hover{background:#eef2f6}
@@ -127,12 +130,21 @@
   .nstop .e small{display:block;font-weight:400;color:var(--muted);font-size:10px}
   @media(max-width:820px){
     #app{flex-direction:column}
-    #mapwrap{flex:none;height:46vh;height:46dvh}
-    #panel{flex:1 1 auto;width:auto;border-left:none;border-top:1px solid var(--line)}
+    #mapwrap{flex:none;height:100vh;height:100dvh}            /* clean full-screen map */
+    #panel{                                                   /* becomes a pull-up bottom sheet */
+      position:fixed;left:0;right:0;bottom:0;top:auto;width:auto;
+      height:86dvh;max-height:86dvh;
+      border-left:none;border-top:none;border-radius:18px 18px 0 0;
+      box-shadow:0 -8px 30px rgba(0,0,0,.22);
+      transform:translateY(calc(86dvh - 86px));              /* collapsed: only the handle + title peek */
+      transition:transform .28s cubic-bezier(.4,0,.2,1);
+      z-index:7;background:#fff}
+    #panel.dragging{transition:none}
+    .sheet-handle{display:flex}
+    #sheetGrab{touch-action:none;cursor:grab;-webkit-tap-highlight-color:transparent}
   }
   /* ---- iPhone / small-phone tuning ---- */
   @media(max-width:600px){
-    #mapwrap{height:42vh;height:42dvh}
     #overlay{top:max(8px,env(safe-area-inset-top,0px));left:max(8px,env(safe-area-inset-left,0px));right:max(8px,env(safe-area-inset-right,0px));width:auto;max-width:none;border-radius:12px}
     #overlay .hd{padding:9px 12px}
     #overlay h1{font-size:13px}
@@ -193,9 +205,12 @@
 </div><!-- /mapwrap -->
 
 <aside id="panel">
-  <div class="p-hd">
-    <h2 id="pTitle">Station arrivals</h2>
-    <div class="p-sub" id="pSub">Next 5 buses each way &middot; live seats available</div>
+  <div id="sheetGrab">
+    <div class="sheet-handle"><span class="grip"></span></div>
+    <div class="p-hd">
+      <h2 id="pTitle">Station arrivals</h2>
+      <div class="p-sub" id="pSub">Next 5 buses each way &middot; live seats available</div>
+    </div>
   </div>
   <div id="busPanel" hidden></div>
   <div id="stationTabs"></div>
@@ -387,6 +402,7 @@ function initMap(){
   google.maps.event.addListener(infoWin,"closeclick",()=>{openKind=null;openId=null;});
   buildRoadRoute(); proceed();
   renderStationTabs(); const _d=STOPS.findIndex(s=>s.name==="Guadalupe"); selectStation(_d<0?0:_d);
+  setupSheet();
   // keep the map correctly sized when the mobile address bar collapses or the phone rotates
   const _recenter=()=>{ if(!mapObj) return; const c=mapObj.getCenter(); google.maps.event.trigger(mapObj,"resize"); if(c) mapObj.setCenter(c); };
   window.addEventListener("resize",_recenter);
@@ -460,7 +476,7 @@ function proceed(){
   new google.maps.Polyline({map:mapObj,path:ROUTE.map(p=>({lat:p[0],lng:p[1]})),strokeColor:"#0e7c66",strokeOpacity:0.9,strokeWeight:5,zIndex:1});
   STOPS.forEach((s,i)=>{ const m=new google.maps.Marker({map:mapObj,position:{lat:s.lat,lng:s.lng},zIndex:2,
       icon:{path:google.maps.SymbolPath.CIRCLE,scale:s.term?6:4.5,fillColor:s.term?"#0e7c66":"#ffffff",fillOpacity:1,strokeColor:"#0e7c66",strokeWeight:2},title:s.name});
-    m.addListener("click",()=>{ selectStation(i); toggleStop(i); }); stopMk[i]=m; });
+    m.addListener("click",()=>{ selectStation(i); if(isSheet()) expandSheet(); else toggleStop(i); }); stopMk[i]=m; });
   FLEET.forEach(b=>{ const m=new google.maps.Marker({map:mapObj,position:markerLatLng(b),zIndex:3,icon:busIcon(b),title:b.plate});
     m.addListener("click",()=>selectBus(b.id)); busMk[b.id]=m; });
   startLiveFeed();
@@ -686,9 +702,41 @@ function selectBus(id){
   const sb=document.getElementById("stationBody"); if(sb) sb.hidden=true;
   const pt=document.getElementById("pTitle"); if(pt) pt.textContent="Bus details";
   const ps=document.getElementById("pSub"); if(ps) ps.innerHTML="Live vehicle, capacity &amp; arrivals";
-  openKind="bus"; openId=id; fetchGoogleEtas(b); infoWin.setContent(busIW(b)); infoWin.open(mapObj,busMk[id]);
+  fetchGoogleEtas(b);
+  if(!isSheet()){ openKind="bus"; openId=id; infoWin.setContent(busIW(b)); infoWin.open(mapObj,busMk[id]); }
   if(mapObj) mapObj.panTo(markerLatLng(b));
   renderBusPanel();
+  if(isSheet()) expandSheet();
+}
+
+/* ---------- mobile bottom sheet (pull-up tab) ---------- */
+function isSheet(){ return window.matchMedia("(max-width:820px)").matches; }
+let sheetState="collapsed";
+function sheetPeek(){ const g=document.getElementById("sheetGrab"); return g?g.offsetHeight:86; }
+function sheetMaxY(){ const p=document.getElementById("panel"); return p?Math.max(0,p.offsetHeight-sheetPeek()):0; }
+function setSheetY(y){ const p=document.getElementById("panel"); if(p) p.style.transform="translateY("+y+"px)"; }
+function expandSheet(){ if(!isSheet())return; sheetState="expanded"; setSheetY(0); }
+function collapseSheet(){ if(!isSheet())return; sheetState="collapsed"; setSheetY(sheetMaxY()); }
+function applySheetMode(){ const p=document.getElementById("panel"); if(!p)return;
+  if(isSheet()) p.style.transform="translateY("+(sheetState==="expanded"?0:sheetMaxY())+"px)";
+  else p.style.transform=""; }
+function setupSheet(){
+  const grab=document.getElementById("sheetGrab"), p=document.getElementById("panel");
+  if(!grab||!p) return;
+  let startY=0,startOff=0,dragging=false,moved=0;
+  const curY=()=>{ const m=p.style.transform.match(/translateY\(([-\d.]+)px\)/); return m?parseFloat(m[1]):sheetMaxY(); };
+  grab.addEventListener("pointerdown",e=>{ if(!isSheet())return; dragging=true;moved=0;startY=e.clientY;startOff=curY();
+    p.classList.add("dragging"); try{grab.setPointerCapture(e.pointerId);}catch(_){ } });
+  grab.addEventListener("pointermove",e=>{ if(!dragging)return; const d=e.clientY-startY; moved=Math.max(moved,Math.abs(d));
+    setSheetY(Math.max(0,Math.min(sheetMaxY(),startOff+d))); });
+  function end(){ if(!dragging)return; dragging=false; p.classList.remove("dragging");
+    const max=sheetMaxY(),y=curY();
+    if(moved<6){ sheetState==="expanded"?collapseSheet():expandSheet(); }
+    else { (y<max*0.5)?expandSheet():collapseSheet(); } }
+  grab.addEventListener("pointerup",end); grab.addEventListener("pointercancel",end);
+  window.addEventListener("resize",applySheetMode);
+  window.addEventListener("orientationchange",()=>setTimeout(applySheetMode,260));
+  applySheetMode();
 }
 
 /* ---------- toggle selection (press opens, press again closes) ---------- */
