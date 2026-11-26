@@ -248,13 +248,14 @@ function fetchGoogleEtas(b){
 
 /* ---------- Google Maps ---------- */
 let mapObj, infoWin, openKind=null, openId=null, simTime=new Date(), last=performance.now(), started=false;
-const busMk={}, stopMk={}, loadCache={};
-const ROUTE_CACHE_KEY="edsa_route_v2";
-
-function busIcon(b){
+const busMk={}, stopMk={}, loadCache={}, headCache={};
+// top-down bus silhouette; front (windshield) at the top, so rotation = heading
+const BUS_PATH="M -3.4 -6.4 L -2.7 -9.4 Q -2.3 -10.4 0 -10.4 Q 2.3 -10.4 2.7 -9.4 L 3.4 -6.4 L 3.4 8.6 Q 3.4 10.4 1.6 10.4 L -1.6 10.4 Q -3.4 10.4 -3.4 8.6 Z";
+function busIcon(b, rot){
   const fill=b.status==="offline"?"#9aa6b2":(b.dir>0?"#0e7c66":"#2563c4");
   const stroke=b.status==="offline"?"#5c6977":loadColor(b.loadFrac||0);
-  return {path:google.maps.SymbolPath.CIRCLE,scale:6,fillColor:fill,fillOpacity:1,strokeColor:stroke,strokeWeight:3};
+  return {path:BUS_PATH, scale:0.95, fillColor:fill, fillOpacity:1, strokeColor:stroke, strokeWeight:2,
+          rotation: rot||0, anchor: new google.maps.Point(0,0)};
 }
 function initMap(){
   document.getElementById("banner").style.display="none";
@@ -264,33 +265,39 @@ function initMap(){
   dmSvc=new google.maps.DistanceMatrixService();
   infoWin=new google.maps.InfoWindow();
   google.maps.event.addListener(infoWin,"closeclick",()=>{openKind=null;openId=null;});
-  resolveRoute(proceed);
+  buildSplineRoute(); proceed();
 }
 window.gm_authFailure=function(){ const b=document.getElementById("banner"); b.style.display="";
   b.innerHTML='<b>Google Maps could not authenticate.</b> Check the API key is valid and "Maps JavaScript API", "Distance Matrix API" and "Directions API" are enabled with billing on.'; };
 
-/* Get the EDSA-snapped path: from cache, else Directions, else straight fallback */
-function resolveRoute(done){
-  // 1) cached
-  try{ const c=JSON.parse(localStorage.getItem(ROUTE_CACHE_KEY)||"null");
-    if(c && c.pts && c.pts.length>50 && c.idx && c.idx.length===NSTOP){ buildRouteGeom(c.pts,c.idx); return done(); } }catch(e){}
-  // 2) Directions API
-  if(CONFIG.snapToRoad && google.maps.DirectionsService){
-    const ds=new google.maps.DirectionsService();
-    ds.route({origin:{lat:STOPS[0].lat,lng:STOPS[0].lng},destination:{lat:STOPS[NSTOP-1].lat,lng:STOPS[NSTOP-1].lng},
-      waypoints:STOPS.slice(1,NSTOP-1).map(s=>({location:{lat:s.lat,lng:s.lng},stopover:true})),travelMode:google.maps.TravelMode.DRIVING},
-      (r,st)=>{
-        if(st==="OK" && r.routes[0]){
-          const pts=[], idx=[0];
-          r.routes[0].legs.forEach(leg=>{ leg.steps.forEach(step=>(step.path||[]).forEach(ll=>{const la=+ll.lat().toFixed(5),ln=+ll.lng().toFixed(5); if(!pts.length||pts[pts.length-1][0]!==la||pts[pts.length-1][1]!==ln)pts.push([la,ln]);})); idx.push(pts.length-1); });
-          try{ localStorage.setItem(ROUTE_CACHE_KEY, JSON.stringify({pts,idx})); }catch(e){}
-          buildRouteGeom(pts, idx);
-        } else { straightFallback(); }
-        done();
-      });
-  } else { straightFallback(); done(); }
+/* Build a smooth EDSA-following centerline through the stations (centripetal
+   Catmull-Rom). It rounds the corridor's bends and never leaves it for a side
+   street, which car-routing did. */
+function crComb(p,q,a,b){ return [p[0]*a+q[0]*b, p[1]*a+q[1]*b]; }
+function crPoint(p0,p1,p2,p3,t){
+  const al=0.5, eps=1e-9;
+  const kn=(ti,pi,pj)=>Math.pow(Math.hypot(pj[0]-pi[0],pj[1]-pi[1]),al)+ti;
+  const t0=0, t1=(kn(t0,p0,p1))||eps, t2=kn(t1,p1,p2), t3=kn(t2,p2,p3);
+  const tt=t1+(t2-t1)*t;
+  const A1=crComb(p0,p1,(t1-tt)/((t1-t0)||eps),(tt-t0)/((t1-t0)||eps));
+  const A2=crComb(p1,p2,(t2-tt)/((t2-t1)||eps),(tt-t1)/((t2-t1)||eps));
+  const A3=crComb(p2,p3,(t3-tt)/((t3-t2)||eps),(tt-t2)/((t3-t2)||eps));
+  const B1=crComb(A1,A2,(t2-tt)/((t2-t0)||eps),(tt-t0)/((t2-t0)||eps));
+  const B2=crComb(A2,A3,(t3-tt)/((t3-t1)||eps),(tt-t1)/((t3-t1)||eps));
+  return crComb(B1,B2,(t2-tt)/((t2-t1)||eps),(tt-t1)/((t2-t1)||eps));
 }
-function straightFallback(){ buildRouteGeom(STOPS.map(s=>[s.lat,s.lng]), STOPS.map((_,i)=>i)); }
+function buildSplineRoute(){
+  const S=STOPS.map(s=>[s.lat,s.lng]); const N=S.length, SEG=16;
+  const pts=[], idx=[];
+  for(let i=0;i<N-1;i++){
+    const p1=S[i], p2=S[i+1];
+    const p0 = i-1>=0 ? S[i-1] : [2*p1[0]-p2[0], 2*p1[1]-p2[1]];     // reflected phantom at the ends
+    const p3 = i+2<N  ? S[i+2] : [2*p2[0]-p1[0], 2*p2[1]-p1[1]];
+    idx.push(pts.length);
+    for(let j=0;j<SEG;j++) pts.push(crPoint(p0,p1,p2,p3,j/SEG)); }
+  idx.push(pts.length); pts.push(S[N-1]);
+  buildRouteGeom(pts.map(p=>[+p[0].toFixed(6),+p[1].toFixed(6)]), idx);
+}
 
 function proceed(){
   if(started) return; started=true;
@@ -324,7 +331,8 @@ function loop(now){
     else { const ll=kmToLatLng(b.pos); plat=ll.lat; plng=ll.lng; brg=routeBearing(ll.seg,b.dir); }
     const p=offsetLL(plat,plng,brg+90,14); busMk[b.id].setPosition(p);
     const lw=b.status==="offline"?"off":loadWord(b.loadFrac||0);
-    if(loadCache[b.id]!==lw){ loadCache[b.id]=lw; busMk[b.id].setIcon(busIcon(b)); }
+    const hd=headCache[b.id]; const turned=(hd===undefined)||Math.abs(((brg-hd)+540)%360-180)>4;
+    if(loadCache[b.id]!==lw || turned){ loadCache[b.id]=lw; headCache[b.id]=brg; busMk[b.id].setIcon(busIcon(b,brg)); }
   }
   updateOverlay();
   if(openKind==="bus"){ const ob=FLEET.find(x=>x.id===openId); if(ob){ fetchGoogleEtas(ob); if(now%1000<32) infoWin.setContent(busIW(ob)); } }
