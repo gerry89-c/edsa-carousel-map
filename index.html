@@ -35,6 +35,7 @@
   }
   html,body{height:100%;margin:0;font-family:var(--font-body);color:var(--ink);overflow:hidden;overscroll-behavior:none;-webkit-text-size-adjust:100%;text-size-adjust:100%}
   [hidden]{display:none!important}
+  .stlabel{text-shadow:0 0 3px #fff,0 0 3px #fff,0 0 4px #fff,0 1px 2px #fff}
   #map{position:absolute;inset:0}
   #overlay{position:absolute;top:12px;left:12px;z-index:5;width:286px;max-width:calc(100vw - 24px);
     background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:0 6px 24px rgba(0,0,0,.18);overflow:hidden;backdrop-filter:blur(4px)}
@@ -470,15 +471,29 @@ function buildSplineRoute(){
   buildRouteGeom(pts.map(p=>[+p[0].toFixed(6),+p[1].toFixed(6)]), idx);
 }
 
+/* Clear, high-visibility station markers: a bold white dot with a thick
+   EDSA-green ring (terminals larger and darker). Names show when zoomed in. */
+function stationIcon(s){
+  return { path:google.maps.SymbolPath.CIRCLE, scale:s.term?9:7,
+    fillColor:"#ffffff", fillOpacity:1,
+    strokeColor:s.term?"#0a5d4c":"#0e7c66", strokeWeight:s.term?4:3,
+    labelOrigin:new google.maps.Point(0, s.term?2.0:2.5) };
+}
+function updateStationLabels(){
+  if(!mapObj) return; const show = mapObj.getZoom()>=14;
+  STOPS.forEach((s,i)=>{ const m=stopMk[i]; if(!m) return;
+    m.setLabel(show?{text:s.name,fontSize:s.term?"12px":"11px",fontWeight:"700",color:s.term?"#0a5d4c":"#0e7c66",className:"stlabel"}:null); });
+}
 function proceed(){
   if(started) return; started=true;
   if(CONFIG.dataSource==="simulator") buildSimFleet();
   new google.maps.Polyline({map:mapObj,path:ROUTE.map(p=>({lat:p[0],lng:p[1]})),strokeColor:"#0e7c66",strokeOpacity:0.9,strokeWeight:5,zIndex:1});
-  STOPS.forEach((s,i)=>{ const m=new google.maps.Marker({map:mapObj,position:{lat:s.lat,lng:s.lng},zIndex:2,
-      icon:{path:google.maps.SymbolPath.CIRCLE,scale:s.term?6:4.5,fillColor:s.term?"#0e7c66":"#ffffff",fillOpacity:1,strokeColor:"#0e7c66",strokeWeight:2},title:s.name});
+  STOPS.forEach((s,i)=>{ const m=new google.maps.Marker({map:mapObj,position:{lat:s.lat,lng:s.lng},zIndex:4,
+      icon:stationIcon(s),title:s.name});
     m.addListener("click",()=>{ selectStation(i); if(isSheet()) expandSheet(); else toggleStop(i); }); stopMk[i]=m; });
   FLEET.forEach(b=>{ const m=new google.maps.Marker({map:mapObj,position:markerLatLng(b),zIndex:3,icon:busIcon(b),title:b.plate});
     m.addListener("click",()=>selectBus(b.id)); busMk[b.id]=m; });
+  mapObj.addListener("zoom_changed", updateStationLabels); updateStationLabels();
   startLiveFeed();
   requestAnimationFrame(loop);
 }
@@ -493,8 +508,18 @@ function loop(now){
     if(CONFIG.dataSource!=="live" && b.status!=="offline"){
       const lvl=traffic[stationSeg(b.pos)];
       const target=b.overspeed?b.cruise:b.cruise*tFactor(lvl);
-      b.speed+=(target-b.speed)*0.06; b.loadFrac+=((Math.max(0,demandAt(b.pos)+0.42*Math.sin(ts/55+b.phase)+0.18))-b.loadFrac)*0.03;
-      if(b.dwell>0) b.dwell-=dt; else { b.pos+=b.dir*b.speed*dtH; if(b.pos>=L){b.pos=L;b.dir=-1;b.dwell=6;} else if(b.pos<=0){b.pos=0;b.dir=1;b.dwell=6;} }
+      const demand=Math.max(0,demandAt(b.pos)+0.42*Math.sin(ts/55+b.phase)+0.18);
+      if(b.dwell>0){                                   // stopped at a station - max 2 minutes (120s)
+        b.dwell-=dt; b.speed=0;
+        b.loadFrac+=(demand-b.loadFrac)*0.05;          // passengers board/alight while stopped
+      } else {
+        b.speed+=(target-b.speed)*0.06; b.loadFrac+=(demand-b.loadFrac)*0.03;
+        const prev=b.pos; b.pos+=b.dir*b.speed*dtH;
+        if(b.pos>=L){ b.pos=L; b.dir=-1; b.dwell=120; }            // terminal layover (2 min)
+        else if(b.pos<=0){ b.pos=0; b.dir=1; b.dwell=120; }
+        else { for(let k=0;k<NSTOP;k++){ const sp=stationPos[k];   // reached a station -> dwell up to 2 min
+            if(b.dir>0 ? (prev<sp && b.pos>=sp) : (prev>sp && b.pos<=sp)){ b.pos=sp; b.dwell=25+Math.random()*95; break; } } }
+      }
     }
     if(!busMk[b.id]) continue;
     let plat,plng,brg;
