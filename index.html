@@ -11,25 +11,20 @@
   ============================================================================
   SETUP
   1. Google Cloud Console (https://console.cloud.google.com/) -> enable these APIs
-     on one project and create an API key:
+     and create an API key:
        - Maps JavaScript API    (the map + live Traffic layer)
        - Distance Matrix API    (real traffic-aware arrival times)
-  2. Put your key in CONFIG.apiKey below (or replace it in the <script src> tag
-     at the bottom). Reload. The banner disappears once the map loads.
+       - Directions API         (snaps the route line onto the actual EDSA road)
+  2. Put your key in CONFIG.apiKey below. Reload.
   3. Open in a browser, or host on any web server.
 
-  DATA SOURCE  (CONFIG.dataSource)
-    "simulator" (default) - 50 buses are generated locally so the page runs with
-        no connection. Good for demos.
-    "live"                - the page polls CONFIG.gpsFeedUrl for the operators'
-        real GPS positions and draws those instead. See the ADAPTER section:
-        point it at your feed and map your fields to the standard shape.
+  DATA SOURCE  (CONFIG.dataSource): "simulator" (default) or "live" (polls
+  CONFIG.gpsFeedUrl for the operators' GPS - see the ADAPTER section).
 
-  ARRIVAL TIMES
-    When you open a bus, the next-stop times are fetched from Google's Distance
-    Matrix with live traffic (departureTime = now). If Google is unavailable or
-    CONFIG.useGoogleEta = false, the page falls back to its own model estimate.
-    Calls are made only for the bus you have open, to keep API usage low.
+  The route line is snapped to the real EDSA road via the Directions API at
+  load, then cached in the browser so it only calls once per visitor. Buses
+  ride that snapped path. If Directions is unavailable the page falls back to
+  straight lines between stations.
   ============================================================================
 -->
 <style>
@@ -43,7 +38,7 @@
   #overlay{position:absolute;top:12px;left:12px;z-index:5;width:286px;max-width:calc(100vw - 24px);
     background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:0 6px 24px rgba(0,0,0,.18);overflow:hidden;backdrop-filter:blur(4px)}
   #overlay .hd{display:flex;align-items:center;gap:10px;padding:11px 13px;border-bottom:1px solid var(--line)}
-  #overlay .pin{width:30px;height:30px;border-radius:8px;background:#0e7c66;color:#fff;display:grid;place-items:center;font-weight:700;font-family:var(--font-head)}
+  #overlay .pin{width:30px;height:30px;border-radius:8px;flex:none;background:#0e7c66;color:#fff;display:grid;place-items:center;font-weight:700;font-family:var(--font-head)}
   #overlay h1{font-size:14px;margin:0;font-family:var(--font-head);line-height:1.1}
   #overlay .sub{font-size:10.5px;color:var(--muted)}
   #badge{font-size:9.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:#c67a00;background:rgba(198,122,0,.12);border:1px solid rgba(198,122,0,.4);padding:2px 6px;border-radius:999px;margin:9px 13px 0;display:inline-block}
@@ -97,7 +92,7 @@
   </div>
 </div>
 
-<div id="banner"><b>Add your Google Maps API key.</b> Put it in <code>CONFIG.apiKey</code> (or the script tag at the bottom of this file), then reload.</div>
+<div id="banner"><b>Add your Google Maps API key.</b> Put it in <code>CONFIG.apiKey</code> near the top of this file, then reload.</div>
 
 <script>
 /* ===========================================================================
@@ -110,6 +105,7 @@ const CONFIG = {
   gpsPollMs: 10000,                     // how often to poll the feed (ms)
   useGoogleEta: true,                   // real traffic-aware arrival times via Distance Matrix
   googleEtaRefreshMs: 30000,            // refresh the open bus's Google ETAs at most this often
+  snapToRoad: true,                     // snap the route line to EDSA via Directions API
 };
 
 /* ---------- EDSA Carousel stations (Monumento -> PITX) ---------- */
@@ -134,27 +130,44 @@ const STOPS = [
   { name:"MOA",lat:14.5340,lng:120.9825 },
   { name:"PITX",lat:14.5102,lng:120.9905,rail:"LRT-1",term:true },
 ];
+const NSTOP = STOPS.length, NSEG = NSTOP - 1;
 const RAD=Math.PI/180, DEG=180/Math.PI, COS=Math.cos(14.585*RAD);
 function hav(a,b){const R=6371;const dLat=(b.lat-a.lat)*RAD,dLng=(b.lng-a.lng)*RAD;const s=Math.sin(dLat/2)**2+Math.cos(a.lat*RAD)*Math.cos(b.lat*RAD)*Math.sin(dLng/2)**2;return 2*R*Math.asin(Math.sqrt(s));}
-const cum=[0]; for(let i=1;i<STOPS.length;i++) cum[i]=cum[i-1]+hav(STOPS[i-1],STOPS[i]); const L=cum[cum.length-1];
-const NSEG=STOPS.length-1;
-function kmToLatLng(km){km=Math.max(0,Math.min(L,km));let i=0;while(i<cum.length-1&&cum[i+1]<km)i++;const seg=cum[i+1]-cum[i]||1,f=(km-cum[i])/seg;return{lat:STOPS[i].lat+(STOPS[i+1].lat-STOPS[i].lat)*f,lng:STOPS[i].lng+(STOPS[i+1].lng-STOPS[i].lng)*f,seg:i};}
-function segBearing(i,dir){const a=STOPS[i],b=STOPS[i+1];let t=Math.atan2((b.lng-a.lng)*Math.cos(a.lat*RAD),(b.lat-a.lat))*DEG;if(dir<0)t+=180;return t;}
-function offsetLL(lat,lng,brg,m){const b=brg*RAD;return{lat:lat+(m*Math.cos(b))/111320,lng:lng+(m*Math.sin(b))/(111320*Math.cos(lat*RAD))};}
-// project a GPS point onto the route -> distance-along (km) + nearest segment (used in live mode)
-function snapToRoute(lat,lng){let best={d:Infinity,km:0,seg:0};
-  for(let i=0;i<NSEG;i++){const a=STOPS[i],b=STOPS[i+1];const ax=a.lng*COS,ay=a.lat,bx=b.lng*COS,by=b.lat,px=lng*COS,py=lat;
-    const dx=bx-ax,dy=by-ay;const t=Math.max(0,Math.min(1,((px-ax)*dx+(py-ay)*dy)/((dx*dx+dy*dy)||1)));
-    const sx=ax+t*dx,sy=ay+t*dy;const d=(px-sx)**2+(py-sy)**2;
-    if(d<best.d) best={d,km:cum[i]+t*(cum[i+1]-cum[i]),seg:i};}
-  return best;}
 
-/* ---------- traffic + load models (fallback / simulator) ---------- */
+/* ---------- route geometry (filled after Directions, or straight fallback) ---------- */
+let ROUTE=[];        // [[lat,lng], ...] road-following path
+let rcum=[0];        // cumulative km along ROUTE
+let L=0;             // total km
+let stationPos=[];   // distance-along-route (km) of each station
+function buildRouteGeom(pts, stationIdx){
+  ROUTE = pts; rcum=[0];
+  for(let i=1;i<ROUTE.length;i++) rcum[i]=rcum[i-1]+hav({lat:ROUTE[i-1][0],lng:ROUTE[i-1][1]},{lat:ROUTE[i][0],lng:ROUTE[i][1]});
+  L = rcum[rcum.length-1];
+  stationPos = stationIdx.map(ix=>rcum[Math.max(0,Math.min(rcum.length-1,ix))]);
+  // guard: make station positions strictly increasing
+  for(let i=1;i<stationPos.length;i++) if(stationPos[i]<=stationPos[i-1]) stationPos[i]=stationPos[i-1]+0.01;
+}
+function kmToLatLng(km){ km=Math.max(0,Math.min(L,km)); let i=0; while(i<rcum.length-1 && rcum[i+1]<km) i++;
+  const seg=rcum[i+1]-rcum[i]||1, f=(km-rcum[i])/seg;
+  return { lat:ROUTE[i][0]+(ROUTE[i+1][0]-ROUTE[i][0])*f, lng:ROUTE[i][1]+(ROUTE[i+1][1]-ROUTE[i][1])*f, seg:i }; }
+function routeBearing(i,dir){ i=Math.max(0,Math.min(ROUTE.length-2,i)); const a=ROUTE[i],b=ROUTE[i+1];
+  let t=Math.atan2((b[1]-a[1])*Math.cos(a[0]*RAD),(b[0]-a[0]))*DEG; if(dir<0)t+=180; return t; }
+function stationSeg(km){ let k=0; while(k<stationPos.length-1 && stationPos[k+1]<km) k++; return Math.max(0,Math.min(NSEG-1,k)); }
+function offsetLL(lat,lng,brg,m){const b=brg*RAD;return{lat:lat+(m*Math.cos(b))/111320,lng:lng+(m*Math.sin(b))/(111320*Math.cos(lat*RAD))};}
+// project a GPS point onto ROUTE -> distance-along (km) (used in live mode)
+function snapToRoute(lat,lng){ let best={d:Infinity,km:0};
+  for(let i=0;i<ROUTE.length-1;i++){ const ax=ROUTE[i][1]*COS,ay=ROUTE[i][0],bx=ROUTE[i+1][1]*COS,by=ROUTE[i+1][0],px=lng*COS,py=lat;
+    const dx=bx-ax,dy=by-ay; const t=Math.max(0,Math.min(1,((px-ax)*dx+(py-ay)*dy)/((dx*dx+dy*dy)||1)));
+    const sx=ax+t*dx,sy=ay+t*dy; const d=(px-sx)**2+(py-sy)**2;
+    if(d<best.d) best={d,km:rcum[i]+t*(rcum[i+1]-rcum[i])}; }
+  return best; }
+
+/* ---------- traffic + load models (fallback / simulator), per station segment ---------- */
 const baseCong=new Array(NSEG).fill(0.5);
 [7,8,9,10,11,12,13,15].forEach(i=>baseCong[i]=1.4); [8,11,12].forEach(i=>baseCong[i]=2.1);
 const traffic=baseCong.slice();
 function tFactor(l){l=Math.max(0,Math.min(3,l));if(l<1)return 1-0.28*l;if(l<2)return 0.72-0.27*(l-1);return 0.45-0.25*(l-2);}
-function demandAt(km){const mid=(cum[8]+cum[13])/2,span=(cum[13]-cum[8])||1;return 0.55*Math.exp(-Math.pow((km-mid)/(span*0.95),2))+0.22;}
+function demandAt(km){const mid=(stationPos[8]+stationPos[13])/2,span=(stationPos[13]-stationPos[8])||1;return 0.55*Math.exp(-Math.pow((km-mid)/(span*0.95),2))+0.22;}
 function loadWord(f){return f<0.1?"Empty":f<0.45?"Light":f<0.75?"Moderate":f<=1?"Full":"Overloaded";}
 function loadColor(f){return f<0.1?"#9aa6b2":f<0.45?"#37b24d":f<0.75?"#f2c200":f<=1?"#f08a24":"#e03a3a";}
 
@@ -170,44 +183,34 @@ function buildSimFleet(){ const N=50;
   FLEET[3].status="offline"; FLEET[3].speed=0;
   FLEET[8].overspeed=true; FLEET[8].cruise=58;
 }
-if(CONFIG.dataSource==="simulator") buildSimFleet();
 
 /* ===========================================================================
-   LIVE GPS FEED  (CONFIG.dataSource = "live")
-   ---------------------------------------------------------------------------
-   ADAPTER: map YOUR feed's fields to this standard shape and return an array:
+   LIVE GPS FEED  (CONFIG.dataSource = "live")  -  map YOUR feed to this shape:
      { plate, lat, lng, speedKph, heading, direction (1=south / -1=north),
        passengers, operator, status ("ok"|"offline") }
-   Each operator's GPS platform is different, so write one adapter per platform.
-   The default below assumes the feed already uses these field names.
    =========================================================================== */
 function ADAPTER(raw){
   const arr = Array.isArray(raw) ? raw : (raw.buses || raw.vehicles || raw.data || []);
   return arr.map(v => ({
-    plate:      v.plate || v.plateNo || v.bus_no || v.vehicleId,
-    lat:        Number(v.lat ?? v.latitude),
-    lng:        Number(v.lng ?? v.lon ?? v.longitude),
-    speedKph:   Number(v.speedKph ?? v.speed ?? 0),
-    heading:    v.heading!=null ? Number(v.heading) : null,
-    direction:  v.direction!=null ? Number(v.direction) : null,
+    plate: v.plate || v.plateNo || v.bus_no || v.vehicleId,
+    lat: Number(v.lat ?? v.latitude), lng: Number(v.lng ?? v.lon ?? v.longitude),
+    speedKph: Number(v.speedKph ?? v.speed ?? 0),
+    heading: v.heading!=null ? Number(v.heading) : null,
+    direction: v.direction!=null ? Number(v.direction) : null,
     passengers: v.passengers!=null ? Number(v.passengers) : null,
-    operator:   v.operator || v.op || "",
-    status:     v.status || "ok",
+    operator: v.operator || v.op || "", status: v.status || "ok",
   }));
 }
 function applyLiveBuses(list){
-  list.forEach(it=>{
-    if(!it.plate || isNaN(it.lat) || isNaN(it.lng)) return;
+  list.forEach(it=>{ if(!it.plate || isNaN(it.lat) || isNaN(it.lng)) return;
     let b=FLEET.find(x=>x.plate===it.plate);
     if(!b){ b={id:"L"+(FLEET.length+1),plate:it.plate,op:it.operator||"",cap:90,dir:it.direction||1,status:"ok",loadFrac:0}; FLEET.push(b);
       if(mapObj){ const m=new google.maps.Marker({map:mapObj,zIndex:3,icon:busIcon(b),title:b.plate}); m.addListener("click",()=>toggleBus(b.id)); busMk[b.id]=m; } }
     const snap=snapToRoute(it.lat,it.lng);
     b.live={lat:it.lat,lng:it.lng}; b.heading=it.heading; b.pos=snap.km; b.speed=it.speedKph; b.op=it.operator||b.op;
     b.status=it.status||"ok"; if(it.direction!=null) b.dir=it.direction;
-    if(it.passengers!=null) b.loadFrac=it.passengers/b.cap;
-    b.lastSeen=Date.now();
+    if(it.passengers!=null) b.loadFrac=it.passengers/b.cap; b.lastSeen=Date.now();
   });
-  // buses not heard from in 60s -> offline
   FLEET.forEach(b=>{ if(b.lastSeen && Date.now()-b.lastSeen>60000) b.status="offline"; });
 }
 function startLiveFeed(){
@@ -221,35 +224,32 @@ function startLiveFeed(){
 }
 
 /* ---------- model ETA (fallback) ---------- */
-function etaModel(b,stopIdx){const to=cum[stopIdx],from=b.pos;if(to===from)return 0;const dir=to>from?1:-1;let mins=0;
-  if(dir>0){let x=from;for(let s=kmToLatLng(from+1e-4).seg;s<NSEG&&x<to-1e-9;s++){const e=Math.min(cum[s+1],to);const sp=Math.max(5,(b.cruise||b.speed||18)*(b.overspeed?1:tFactor(traffic[s])));mins+=(e-x)/sp*60;x=e;}}
-  else{let x=from;for(let s=kmToLatLng(from-1e-4).seg;s>=0&&x>to+1e-9;s--){const st=Math.max(cum[s],to);const sp=Math.max(5,(b.cruise||b.speed||18)*(b.overspeed?1:tFactor(traffic[s])));mins+=(x-st)/sp*60;x=st;}}
+function etaModel(b,stopIdx){const to=stationPos[stopIdx],from=b.pos;if(to===from)return 0;const dir=to>from?1:-1;let mins=0;
+  if(dir>0){let x=from;for(let s=stationSeg(from+1e-4);s<NSEG&&x<to-1e-9;s++){const e=Math.min(stationPos[s+1],to);const sp=Math.max(5,(b.cruise||b.speed||18)*(b.overspeed?1:tFactor(traffic[s])));mins+=(e-x)/sp*60;x=e;}}
+  else{let x=from;for(let s=stationSeg(from-1e-4);s>=0&&x>to+1e-9;s--){const st=Math.max(stationPos[s],to);const sp=Math.max(5,(b.cruise||b.speed||18)*(b.overspeed?1:tFactor(traffic[s])));mins+=(x-st)/sp*60;x=st;}}
   return mins;}
-function nextStopIdxs(b){const out=[];if(b.dir>0){for(let i=0;i<STOPS.length;i++)if(cum[i]>b.pos+0.02)out.push(i);}else{for(let i=STOPS.length-1;i>=0;i--)if(cum[i]<b.pos-0.02)out.push(i);}return out;}
+function nextStopIdxs(b){const out=[];if(b.dir>0){for(let i=0;i<NSTOP;i++)if(stationPos[i]>b.pos+0.02)out.push(i);}else{for(let i=NSTOP-1;i>=0;i--)if(stationPos[i]<b.pos-0.02)out.push(i);}return out;}
 
 /* ---------- Google real-traffic ETA (Distance Matrix, for the open bus) ---------- */
 let dmSvc=null;
 function markerLatLng(b){ return (CONFIG.dataSource==="live"&&b.live) ? b.live : kmToLatLng(b.pos); }
 function fetchGoogleEtas(b){
   if(!CONFIG.useGoogleEta || !dmSvc || b.status==="offline") return;
-  const now=Date.now();
-  if(b._geta && now-b._geta.t < CONFIG.googleEtaRefreshMs) return;
-  b._geta = b._geta || {t:0, map:{}}; b._geta.t = now;   // throttle attempts
-  const idxs=nextStopIdxs(b).slice(0,4);
-  if(!idxs.length) return;
+  const now=Date.now(); if(b._geta && now-b._geta.t < CONFIG.googleEtaRefreshMs) return;
+  b._geta = b._geta || {t:0, map:{}}; b._geta.t = now;
+  const idxs=nextStopIdxs(b).slice(0,4); if(!idxs.length) return;
   const dest=idxs.map(i=>({lat:STOPS[i].lat,lng:STOPS[i].lng}));
   dmSvc.getDistanceMatrix({origins:[markerLatLng(b)],destinations:dest,travelMode:google.maps.TravelMode.DRIVING,
       drivingOptions:{departureTime:new Date(),trafficModel:google.maps.TrafficModel.BEST_GUESS}},
     (res,status)=>{ if(status!=="OK"||!res.rows[0]) return;
       const map={}; res.rows[0].elements.forEach((el,k)=>{ if(el.status==="OK"){ const s=el.duration_in_traffic||el.duration; if(s) map[idxs[k]]=s.value/60; } });
-      b._geta={t:Date.now(),map};
-      if(openKind==="bus"&&openId===b.id) infoWin.setContent(busIW(b));
-    });
+      b._geta={t:Date.now(),map}; if(openKind==="bus"&&openId===b.id) infoWin.setContent(busIW(b)); });
 }
 
 /* ---------- Google Maps ---------- */
-let mapObj, infoWin, openKind=null, openId=null, simTime=new Date(), last=performance.now();
+let mapObj, infoWin, openKind=null, openId=null, simTime=new Date(), last=performance.now(), started=false;
 const busMk={}, stopMk={}, loadCache={};
+const ROUTE_CACHE_KEY="edsa_route_v2";
 
 function busIcon(b){
   const fill=b.status==="offline"?"#9aa6b2":(b.dir>0?"#0e7c66":"#2563c4");
@@ -264,7 +264,38 @@ function initMap(){
   dmSvc=new google.maps.DistanceMatrixService();
   infoWin=new google.maps.InfoWindow();
   google.maps.event.addListener(infoWin,"closeclick",()=>{openKind=null;openId=null;});
-  new google.maps.Polyline({map:mapObj,path:STOPS.map(s=>({lat:s.lat,lng:s.lng})),strokeColor:"#0e7c66",strokeOpacity:0.85,strokeWeight:5,zIndex:1});
+  resolveRoute(proceed);
+}
+window.gm_authFailure=function(){ const b=document.getElementById("banner"); b.style.display="";
+  b.innerHTML='<b>Google Maps could not authenticate.</b> Check the API key is valid and "Maps JavaScript API", "Distance Matrix API" and "Directions API" are enabled with billing on.'; };
+
+/* Get the EDSA-snapped path: from cache, else Directions, else straight fallback */
+function resolveRoute(done){
+  // 1) cached
+  try{ const c=JSON.parse(localStorage.getItem(ROUTE_CACHE_KEY)||"null");
+    if(c && c.pts && c.pts.length>50 && c.idx && c.idx.length===NSTOP){ buildRouteGeom(c.pts,c.idx); return done(); } }catch(e){}
+  // 2) Directions API
+  if(CONFIG.snapToRoad && google.maps.DirectionsService){
+    const ds=new google.maps.DirectionsService();
+    ds.route({origin:{lat:STOPS[0].lat,lng:STOPS[0].lng},destination:{lat:STOPS[NSTOP-1].lat,lng:STOPS[NSTOP-1].lng},
+      waypoints:STOPS.slice(1,NSTOP-1).map(s=>({location:{lat:s.lat,lng:s.lng},stopover:true})),travelMode:google.maps.TravelMode.DRIVING},
+      (r,st)=>{
+        if(st==="OK" && r.routes[0]){
+          const pts=[], idx=[0];
+          r.routes[0].legs.forEach(leg=>{ leg.steps.forEach(step=>(step.path||[]).forEach(ll=>{const la=+ll.lat().toFixed(5),ln=+ll.lng().toFixed(5); if(!pts.length||pts[pts.length-1][0]!==la||pts[pts.length-1][1]!==ln)pts.push([la,ln]);})); idx.push(pts.length-1); });
+          try{ localStorage.setItem(ROUTE_CACHE_KEY, JSON.stringify({pts,idx})); }catch(e){}
+          buildRouteGeom(pts, idx);
+        } else { straightFallback(); }
+        done();
+      });
+  } else { straightFallback(); done(); }
+}
+function straightFallback(){ buildRouteGeom(STOPS.map(s=>[s.lat,s.lng]), STOPS.map((_,i)=>i)); }
+
+function proceed(){
+  if(started) return; started=true;
+  if(CONFIG.dataSource==="simulator") buildSimFleet();
+  new google.maps.Polyline({map:mapObj,path:ROUTE.map(p=>({lat:p[0],lng:p[1]})),strokeColor:"#0e7c66",strokeOpacity:0.9,strokeWeight:5,zIndex:1});
   STOPS.forEach((s,i)=>{ const m=new google.maps.Marker({map:mapObj,position:{lat:s.lat,lng:s.lng},zIndex:2,
       icon:{path:google.maps.SymbolPath.CIRCLE,scale:s.term?6:4.5,fillColor:s.term?"#0e7c66":"#ffffff",fillOpacity:1,strokeColor:"#0e7c66",strokeWeight:2},title:s.name});
     m.addListener("click",()=>toggleStop(i)); stopMk[i]=m; });
@@ -273,8 +304,6 @@ function initMap(){
   startLiveFeed();
   requestAnimationFrame(loop);
 }
-window.gm_authFailure=function(){ const b=document.getElementById("banner"); b.style.display="";
-  b.innerHTML='<b>Google Maps could not authenticate.</b> Check the API key is valid and "Maps JavaScript API" + "Distance Matrix API" are enabled with billing on.'; };
 
 /* ---------- animation loop ---------- */
 function loop(now){
@@ -283,16 +312,16 @@ function loop(now){
   for(let i=0;i<NSEG;i++) traffic[i]=Math.max(0,Math.min(3,baseCong[i]+0.8*Math.sin(ts/90+i*0.7)+0.3*Math.sin(ts/37+i)));
 
   for(const b of FLEET){
-    if(CONFIG.dataSource!=="live" && b.status!=="offline"){      // simulator movement
-      const seg=kmToLatLng(b.pos).seg, lvl=traffic[Math.max(0,Math.min(NSEG-1,seg))];
+    if(CONFIG.dataSource!=="live" && b.status!=="offline"){
+      const lvl=traffic[stationSeg(b.pos)];
       const target=b.overspeed?b.cruise:b.cruise*tFactor(lvl);
       b.speed+=(target-b.speed)*0.06; b.loadFrac+=((Math.max(0,demandAt(b.pos)+0.42*Math.sin(ts/55+b.phase)+0.18))-b.loadFrac)*0.03;
       if(b.dwell>0) b.dwell-=dt; else { b.pos+=b.dir*b.speed*dtH; if(b.pos>=L){b.pos=L;b.dir=-1;b.dwell=6;} else if(b.pos<=0){b.pos=0;b.dir=1;b.dwell=6;} }
     }
     if(!busMk[b.id]) continue;
     let plat,plng,brg;
-    if(CONFIG.dataSource==="live" && b.live){ plat=b.live.lat; plng=b.live.lng; brg=(b.heading!=null)?b.heading:segBearing(kmToLatLng(b.pos).seg,b.dir); }
-    else { const ll=kmToLatLng(b.pos); plat=ll.lat; plng=ll.lng; brg=segBearing(ll.seg,b.dir); }
+    if(CONFIG.dataSource==="live" && b.live){ plat=b.live.lat; plng=b.live.lng; brg=(b.heading!=null)?b.heading:routeBearing(kmToLatLng(b.pos).seg,b.dir); }
+    else { const ll=kmToLatLng(b.pos); plat=ll.lat; plng=ll.lng; brg=routeBearing(ll.seg,b.dir); }
     const p=offsetLL(plat,plng,brg+90,14); busMk[b.id].setPosition(p);
     const lw=b.status==="offline"?"off":loadWord(b.loadFrac||0);
     if(loadCache[b.id]!==lw){ loadCache[b.id]=lw; busMk[b.id].setIcon(busIcon(b)); }
@@ -324,7 +353,7 @@ function busIW(b){ if(!b) return "";
   const col=b.status==="offline"?"#9aa6b2":(b.dir>0?"#0e7c66":"#2563c4");
   let h=`<div class="iw"><div><span class="plate" style="background:${col}">${b.plate}</span><span class="dir">${dir}</span></div>`;
   if(b.status==="offline"){ h+=`<div class="r"><span class="l">Status</span><span class="v" style="color:#cf3b3b">GPS offline</span></div><div class="r"><span class="l">Operator</span><span class="v">${b.op||"&mdash;"}</span></div></div>`; return h; }
-  const ll=markerLatLng(b), lvl=traffic[Math.max(0,Math.min(NSEG-1,snapToRoute(ll.lat,ll.lng).seg))];
+  const lvl=traffic[stationSeg(b.pos)];
   const tw=lvl<1?"Free":lvl<2?"Moderate":lvl<2.6?"Heavy":"Standstill";
   const usingG = b._geta && Object.keys(b._geta.map||{}).length>0;
   h+=`<div class="r"><span class="l">Speed</span><span class="v">${(b.speed||0).toFixed(0)} km/h</span></div>`+
@@ -338,7 +367,7 @@ function busIW(b){ if(!b) return "";
 }
 function stopIW(i){ const st=STOPS[i];
   function board(dirSel,label){ const list=[];
-    FLEET.forEach(b=>{if(b.status==="offline")return;if(b.dir!==dirSel)return;const heading=(dirSel>0&&cum[i]>b.pos+0.02)||(dirSel<0&&cum[i]<b.pos-0.02);if(heading)list.push({b,eta:etaModel(b,i)});});
+    FLEET.forEach(b=>{if(b.status==="offline")return;if(b.dir!==dirSel)return;const heading=(dirSel>0&&stationPos[i]>b.pos+0.02)||(dirSel<0&&stationPos[i]<b.pos-0.02);if(heading)list.push({b,eta:etaModel(b,i)});});
     list.sort((a,b)=>a.eta-b.eta);
     let h=`<div class="boardttl" style="color:${dirSel>0?'#0e7c66':'#2563c4'}">${label}</div>`;
     h+=list.length?list.slice(0,3).map(a=>{const at=new Date(simTime.getTime()+a.eta*60000);const cl=String(at.getHours()).padStart(2,"0")+":"+String(at.getMinutes()).padStart(2,"0");
