@@ -47,6 +47,7 @@
   .stat .k{font-size:9.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;font-weight:600}
   .stat .v{font-size:20px;font-weight:700;font-family:var(--font-head);line-height:1;margin-top:2px}
   .stat .v small{font-size:11px;color:var(--muted);font-weight:500}
+  .stat .v.corr{font-size:15px;white-space:nowrap}
   .legend{padding:8px 13px 12px;font-size:11px;color:var(--muted);border-top:1px solid var(--line)}
   .legend .row{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;margin-top:5px}
   .legend b{color:var(--ink)}
@@ -80,7 +81,7 @@
   #panel .p-hd h2{margin:0;font-family:var(--font-head);font-size:15px}
   #panel .p-hd .p-sub{font-size:11px;color:var(--muted);margin-top:2px}
   #stationTabs{display:flex;gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding:9px 12px;border-bottom:1px solid var(--line);flex:none;scrollbar-width:thin}
-  #stationTabs .tab{flex:none;font-size:12px;font-weight:600;padding:6px 11px;border-radius:999px;border:1px solid var(--line);background:#f6f8fa;color:var(--ink);cursor:pointer;white-space:nowrap;-webkit-tap-highlight-color:transparent}
+  #stationTabs .tab{flex:none;font-size:12px;font-weight:600;padding:6px 11px;border-radius:999px;border:1px solid var(--line);background:#f6f8fa;color:var(--ink);cursor:pointer;white-space:nowrap;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
   #stationTabs .tab:hover{background:#eef2f6}
   #stationTabs .tab.active{background:#0e7c66;color:#fff;border-color:#0e7c66}
   #stationBody{flex:1 1 auto;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;padding:13px 15px;padding-bottom:max(16px,env(safe-area-inset-bottom,0px))}
@@ -125,6 +126,20 @@
     #stationTabs{padding-left:max(12px,env(safe-area-inset-left,0px));padding-right:max(12px,env(safe-area-inset-right,0px))}
     #stationTabs .tab{padding:7px 12px}
     #stationBody{padding-left:max(14px,env(safe-area-inset-left,0px));padding-right:max(14px,env(safe-area-inset-right,0px))}
+    .stat .v.corr{font-size:12.5px}
+  }
+  /* ---- extra-narrow phones (e.g. Galaxy S / folded cover screens) ---- */
+  @media(max-width:380px){
+    #overlay .hd{padding:8px 10px}
+    #overlay h1{font-size:12px}
+    #overlay .sub{font-size:9.5px}
+    #stats{gap:4px;padding:7px 8px}
+    .stat{padding:5px 6px}
+    .stat .v{font-size:15px}
+    .stat .v.corr{font-size:11px}
+    #stationTabs .tab{font-size:11.5px;padding:7px 10px}
+    .bus{padding:8px 9px}
+    .bus .num{font-size:13px}
   }
 </style>
 </head>
@@ -348,6 +363,10 @@ function initMap(){
   google.maps.event.addListener(infoWin,"closeclick",()=>{openKind=null;openId=null;});
   buildRoadRoute(); proceed();
   renderStationTabs(); const _d=STOPS.findIndex(s=>s.name==="Guadalupe"); selectStation(_d<0?0:_d);
+  // keep the map correctly sized when the mobile address bar collapses or the phone rotates
+  const _recenter=()=>{ if(!mapObj) return; const c=mapObj.getCenter(); google.maps.event.trigger(mapObj,"resize"); if(c) mapObj.setCenter(c); };
+  window.addEventListener("resize",_recenter);
+  window.addEventListener("orientationchange",()=>setTimeout(_recenter,250));
 }
 window.gm_authFailure=function(){ const b=document.getElementById("banner"); b.style.display="";
   b.innerHTML='<b>Google Maps could not authenticate.</b> Check the API key is valid and "Maps JavaScript API", "Distance Matrix API" and "Directions API" are enabled with billing on.'; };
@@ -462,7 +481,7 @@ function updateOverlay(){
   document.getElementById("stats").innerHTML=
     `<div class="stat"><div class="k">Active</div><div class="v">${online.length}<small>/${FLEET.length}</small></div></div>`+
     `<div class="stat"><div class="k">Avg speed</div><div class="v">${isFinite(avg)?avg.toFixed(0):0}<small> km/h</small></div></div>`+
-    `<div class="stat"><div class="k">Corridor</div><div class="v" style="font-size:15px;color:${meanT<1?'#37b24d':meanT<2?'#c67a00':'#cf3b3b'}">${tw}</div></div>`+
+    `<div class="stat"><div class="k">Corridor</div><div class="v corr" style="color:${meanT<1?'#37b24d':meanT<2?'#c67a00':'#cf3b3b'}">${tw}</div></div>`+
     `<div class="stat"><div class="k">Alerts</div><div class="v" style="color:${alerts?'#cf3b3b':'#121820'}">${alerts}</div></div>`;
   document.querySelector("#clock .t").textContent=String(simTime.getHours()).padStart(2,"0")+":"+String(simTime.getMinutes()).padStart(2,"0");
   document.querySelector("#clock .d").textContent=simTime.toLocaleDateString("en-PH",{weekday:"short",day:"numeric",month:"short"});
